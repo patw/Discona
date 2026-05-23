@@ -107,7 +107,7 @@ Responses longer than 2000 characters are automatically split into multiple Disc
 
 ## Data Storage
 
-All data is stored as BSON flat files via [moofile](https://github.com/whatever/moofile):
+All data is stored as BSON flat files via [moofile](https://github.com/patw/moofile):
 
 - `bots.bson` — bot configurations
 - `relationships.bson` — per-bot user relationship facts  
