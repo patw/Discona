@@ -1,0 +1,6 @@
+Flask
+Flask-Bootstrap
+python-dotenv
+discord.py
+openai
+moofile

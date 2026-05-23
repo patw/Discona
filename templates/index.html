@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Discona</title>
+    {{ bootstrap.load_css() }}
+    {{ bootstrap.load_js() }}
+    <style>
+        body {
+            background: #f8f9fa;
+            min-height: 100vh;
+            margin: 0;
+            display: flex;
+            flex-direction: column;
+            align-items: stretch;
+            font-family: 'Inter', sans-serif;
+        }
+    </style>
+</head>
+
+<body>
+    <!-- Top navigation bar -->
+    <nav class="navbar navbar-expand-lg navbar-light bg-light w-100">
+        <div class="container-fluid">
+            <a class="navbar-brand" href="#">
+                🤵🤖👩
+            </a>
+            <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav"
+                aria-controls="navbarNav" aria-expanded="false" aria-label="Toggle navigation">
+                <span class="navbar-toggler-icon"></span>
+            </button>
+            <div class="collapse navbar-collapse" id="navbarNav">
+                <ul class="navbar-nav me-auto">
+                    <li class="nav-item">
+                        <a class="nav-link" href="{{ url_for('index') }}">Bots</a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="{{ url_for('system') }}">System</a>
+                    </li>
+                </ul>
+                <ul class="navbar-nav">
+                    <li class="nav-item">
+                        <a class="nav-link" href="{{ url_for('logout') }}">Logout</a>
+                    </li>
+                </ul>
+            </div>
+        </div>
+    </nav>
+    <div class="container">
+        <div class="row justify-content-center">
+            <div class="col-md-10">
+                <div class="d-flex justify-content-between align-items-center mb-3 mt-5">
+                    <h3>Configured Bots</h3>
+                    <a href="{{ url_for('new_bot') }}" class="btn btn-success">New Bot</a>
+                </div>
+                <div class="card p-4">
+                    <table class="table table-borderless mb-0">
+                        <thead class="border-bottom">
+                            <tr>
+                                <th>Name</th>
+                                <th>Description</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for bot in bots %}
+                            <tr>
+                                <td>{{ bot['name'] }}</td>
+                                <td>{{ bot['description'] }}</td>
+                                <td>
+                                    <a href="{{ url_for('edit_bot', bot_id=bot['_id']) }}"
+                                        class="btn btn-sm btn-outline-warning me-1">Edit</a>
+                                    <button type="button" class="btn btn-sm btn-outline-danger me-1"
+                                        data-bs-toggle="modal" data-bs-target="#deleteBotModal"
+                                        data-bot-id="{{ bot['_id'] }}" data-bot-name="{{ bot['name'] }}">
+                                        Delete
+                                    </button>
+                                    <a href="{{ url_for('bot_relationships', bot_id=bot['_id']) }}"
+                                        class="btn btn-sm btn-outline-info">Relationships</a>
+                                </td>
+                            </tr>
+                            {% else %}
+                            <tr>
+                                <td colspan="4" class="text-center text-muted py-4">
+                                    <em>No bots found. Click "New Bot" to get started.</em>
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Delete Confirmation Modal -->
+    <div class="modal fade" id="deleteBotModal" tabindex="-1" aria-hidden="true">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">Delete Bot?</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"
+                        aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    Are you sure you want to delete <strong id="deleteBotName"></strong>? This action cannot be undone.
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <form id="deleteBotForm" action="" method="post" style="display:inline;">
+                        <button type="submit" class="btn btn-danger">Delete</button>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        var deleteModal = document.getElementById('deleteBotModal')
+        deleteModal.addEventListener('show.bs.modal', function (event) {
+            var button = event.relatedTarget
+            var botId = button.getAttribute('data-bot-id')
+            var botName = button.getAttribute('data-bot-name')
+            var modalBodyName = deleteModal.querySelector('#deleteBotName')
+            var deleteForm = deleteModal.querySelector('#deleteBotForm')
+
+            modalBodyName.textContent = botName
+            deleteForm.action = '/bot/' + botId + '/delete'
+        })
+    </script>
+</body>
+
+</html>

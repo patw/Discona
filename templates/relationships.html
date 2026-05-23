@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{{ bot['name'] }} Relationships – Discona</title>
+    {{ bootstrap.load_css() }}
+    {{ bootstrap.load_js() }}
+    <style>
+        body {
+            background: #f8f9fa;
+            min-height: 100vh;
+            margin: 0;
+            display: flex;
+            flex-direction: column;
+            align-items: stretch;
+            font-family: 'Inter', sans-serif;
+        }
+    </style>
+</head>
+
+<body>
+    <!-- Top navigation bar -->
+    <nav class="navbar navbar-expand-lg navbar-light bg-light w-100">
+        <div class="container-fluid">
+            <a class="navbar-brand" href="#">
+                🤵🤖👩
+            </a>
+            <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav"
+                aria-controls="navbarNav" aria-expanded="false" aria-label="Toggle navigation">
+                <span class="navbar-toggler-icon"></span>
+            </button>
+            <div class="collapse navbar-collapse" id="navbarNav">
+                <ul class="navbar-nav me-auto">
+                    <li class="nav-item">
+                        <a class="nav-link" href="{{ url_for('index') }}">Bots</a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="{{ url_for('system') }}">System</a>
+                    </li>
+                </ul>
+                <ul class="navbar-nav">
+                    <li class="nav-item">
+                        <a class="nav-link" href="{{ url_for('logout') }}">Logout</a>
+                    </li>
+                </ul>
+            </div>
+        </div>
+    </nav>
+    <div class="container">
+        <div class="row justify-content-center">
+            <div class="col-md-10">
+                <div class="d-flex justify-content-between align-items-center mb-3 mt-5">
+                    <h3>Relationships for {{ bot['name'] }}</h3>
+                    <div>
+                        <a href="{{ url_for('index') }}" class="btn btn-outline-secondary me-2">Back</a>
+                        <a href="{{ url_for('new_relationship', bot_id=bot['_id']) }}" class="btn btn-success">New
+                            Relationship</a>
+                    </div>
+                </div>
+                <div class="card p-4">
+                    <table class="table table-borderless mb-0">
+                        <thead class="border-bottom">
+                            <tr>
+                                <th>Name</th>
+                                <th>Facts</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for rel in relationships %}
+                            <tr>
+                                <td>{{ rel['name'] }}</td>
+                                <td>{{ rel['facts'] }}</td>
+                                <td>
+                                    <a href="{{ url_for('edit_relationship', bot_id=bot['_id'], rel_id=rel['_id']) }}"
+                                        class="btn btn-sm btn-outline-warning me-1">Edit</a>
+                                    <button type="button" class="btn btn-sm btn-outline-danger" data-bs-toggle="modal"
+                                        data-bs-target="#deleteRelModal" data-bot-id="{{ bot['_id'] }}"
+                                        data-rel-id="{{ rel['_id'] }}" data-rel-name="{{ rel['name'] }}">
+                                        Delete
+                                    </button>
+                                </td>
+                            </tr>
+                            {% else %}
+                            <tr>
+                                <td colspan="3" class="text-center text-muted py-4">
+                                    <em>No relationships found. Click "New Relationship" to add one.</em>
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Delete Confirmation Modal -->
+    <div class="modal fade" id="deleteRelModal" tabindex="-1" aria-hidden="true">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">Delete Relationship?</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"
+                        aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    Are you sure you want to delete the relationship with <strong id="deleteRelName"></strong>?
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <form id="deleteRelForm" action="" method="post" style="display:inline;">
+                        <button type="submit" class="btn btn-danger">Delete</button>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        var deleteRelModal = document.getElementById('deleteRelModal')
+        deleteRelModal.addEventListener('show.bs.modal', function (event) {
+            var button = event.relatedTarget
+            var botId = button.getAttribute('data-bot-id')
+            var relId = button.getAttribute('data-rel-id')
+            var relName = button.getAttribute('data-rel-name')
+            var modalBodyName = deleteRelModal.querySelector('#deleteRelName')
+            var deleteForm = deleteRelModal.querySelector('#deleteRelForm')
+
+            modalBodyName.textContent = relName
+            deleteForm.action = '/bot/' + botId + '/relationship/' + relId + '/delete'
+        })
+    </script>
+</body>
+
+</html>

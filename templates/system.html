@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>System Config – Discona</title>
+    {{ bootstrap.load_css() }}
+    {{ bootstrap.load_js() }}
+    <style>
+        body {
+            background: #f8f9fa;
+            min-height: 100vh;
+            margin: 0;
+            display: flex;
+            flex-direction: column;
+            align-items: stretch;
+            font-family: 'Inter', sans-serif;
+        }
+    </style>
+</head>
+
+<body>
+    <!-- Top navigation bar -->
+    <nav class="navbar navbar-expand-lg navbar-light bg-light w-100">
+        <div class="container-fluid">
+            <a class="navbar-brand" href="#">
+                🤵🤖👩
+            </a>
+            <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav"
+                aria-controls="navbarNav" aria-expanded="false" aria-label="Toggle navigation">
+                <span class="navbar-toggler-icon"></span>
+            </button>
+            <div class="collapse navbar-collapse" id="navbarNav">
+                <ul class="navbar-nav me-auto">
+                    <li class="nav-item">
+                        <a class="nav-link" href="{{ url_for('index') }}">Bots</a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="{{ url_for('system') }}">System</a>
+                    </li>
+                </ul>
+                <ul class="navbar-nav">
+                    <li class="nav-item">
+                        <a class="nav-link" href="{{ url_for('logout') }}">Logout</a>
+                    </li>
+                </ul>
+            </div>
+        </div>
+    </nav>
+    <div class="container">
+        <div class="row justify-content-center">
+            <div class="col-md-8">
+                <div class="card p-4 mt-5">
+                    <h2 class="mb-4 text-center">System Configuration</h2>
+                    <form method="post">
+                        <div class="mb-3">
+                            <label for="openai_base_url" class="form-label">OpenAI Base URL</label>
+                            <input type="text" class="form-control" id="openai_base_url" name="openai_base_url" required
+                                value="{{ config['openai_base_url'] }}" placeholder="e.g. http://localhost:8080/v1">
+                            <div class="form-text text-muted">Points to your local LLM server (e.g. llama.cpp)</div>
+                        </div>
+                        <div class="mb-3">
+                            <label for="openai_api_key" class="form-label">API Key</label>
+                            <input type="text" class="form-control" id="openai_api_key" name="openai_api_key"
+                                value="{{ config['openai_api_key'] }}" placeholder="sk-...">
+                            <div class="form-text text-muted">Usually ignored by local runners, but required by
+                                client.</div>
+                        </div>
+                        <div class="mb-3">
+                            <label for="model_name" class="form-label">Model Name</label>
+                            <input type="text" class="form-control" id="model_name" name="model_name"
+                                value="{{ config['model_name'] }}" placeholder="e.g. llama-3-8b">
+                        </div>
+                        <div class="mb-3">
+                            <label for="default_temperature" class="form-label">Default Temperature</label>
+                            <input type="number" class="form-control" id="default_temperature"
+                                name="default_temperature" min="0" max="2" step="0.1"
+                                value="{{ config['default_temperature'] }}">
+                        </div>
+                        <div class="mb-3">
+                            <label for="history_lines" class="form-label">History Lines</label>
+                            <input type="number" class="form-control" id="history_lines"
+                                name="history_lines" min="0" max="100" step="1"
+                                value="{{ config['history_lines'] if config['history_lines'] is not none else 10 }}">
+                            <div class="form-text text-muted">Number of previous Discord messages each bot sees as context.</div>
+                        </div>
+                        <div class="d-flex justify-content-between mt-4">
+                            <a href="{{ url_for('index') }}" class="btn btn-outline-secondary">Cancel</a>
+                            <button type="submit" class="btn btn-primary">Save Configuration</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+</body>
+
+</html>
