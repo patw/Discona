@@ -6,6 +6,9 @@ CLAUDE.md
 .env.*
 !.env.example
 
+# Deployment
+deploy.sh
+
 # Data files
 *.bson
 *.bson.meta
