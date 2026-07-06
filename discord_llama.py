@@ -27,28 +27,10 @@ if not bot_data:
     print(f"Error: Bot ID {bot_id} not found.")
     sys.exit(1)
 
-bot_config = {
-    "discord_token": bot_data["discord_api_key"],
-    "identity": f"{bot_data.get('backstory', '')}\n\n{bot_data.get('personality', '')}\n\n{bot_data.get('writing_sample', '')}",
-    "triggers": [w.strip() for w in bot_data["trigger_words"].split(",")] if bot_data.get("trigger_words") else [],
-    "trigger_level": bot_data.get("activity_level") or 0.0,
-    "history_lines": 10,
-    "question_prompt": "Background:\n{identity}\n\nContext:\n{history}\n\n{user} asks: {question}\n\nReply:",
-    "trigger_prompt": "Background:\n{identity}\n\nContext:\n{history}\n\n{user} says: {question}\n\nReply (optional, stay in character):",
-}
+discord_token = bot_data["discord_api_key"]
 
-sys_config = config_col.find_one({'_id': 'config'})
-if not sys_config:
-    print("Error: System config not found.")
-    sys.exit(1)
-
-llm_config = {
-    "base_url": sys_config["openai_base_url"],
-    "api_key": sys_config["openai_api_key"],
-    "model": sys_config["model_name"],
-    "temperature": sys_config["default_temperature"],
-}
-bot_config["history_lines"] = sys_config.get("history_lines") or 10
+QUESTION_PROMPT = "Context:\n{history}\n\n{user} asks: {question}\n\nReply:"
+TRIGGER_PROMPT = "Context:\n{history}\n\n{user} says: {question}\n\nReply (optional, stay in character):"
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -74,17 +56,29 @@ def split_message(message):
     return [message[i:i+2000] for i in range(0, len(message), 2000)]
 
 
-def llm_local(prompt, system_prompt):
-    openai_client = OpenAI(api_key=llm_config["api_key"], base_url=llm_config["base_url"])
+def llm_local(prompt, system_prompt, llm_cfg):
+    openai_client = OpenAI(api_key=llm_cfg["api_key"], base_url=llm_cfg["base_url"])
     messages = [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": prompt},
     ]
-    temp = float(llm_config.get("temperature", 0.7))
+    temp = float(llm_cfg.get("temperature", 0.7))
     response = openai_client.chat.completions.create(
-        model=llm_config["model"], max_tokens=2000, temperature=temp, messages=messages
+        model=llm_cfg["model"], max_tokens=2000, temperature=temp, messages=messages
     )
     return response.choices[0].message.content
+
+
+def build_identity(bot_data):
+    """Build the system prompt from bot fields, skipping empty sections."""
+    parts = []
+    if bot_data.get('backstory'):
+        parts.append(bot_data['backstory'])
+    if bot_data.get('personality'):
+        parts.append(bot_data['personality'])
+    if bot_data.get('writing_sample'):
+        parts.append(f"Writing style (always write in this style):\n{bot_data['writing_sample']}")
+    return "\n\n".join(parts)
 
 
 @client.event
@@ -97,8 +91,29 @@ async def on_message(message):
     if message.author == client.user:
         return
 
+    # Re-read bot data on every message so edits take effect live
+    bot_data = bots_col.find_one({'_id': bot_id})
+    if not bot_data:
+        print(f"Bot {bot_id} no longer in database, skipping.")
+        return
+
+    sys_config = config_col.find_one({'_id': 'config'})
+    if not sys_config:
+        print("System config not found, skipping.")
+        return
+
+    triggers = [w.strip() for w in bot_data["trigger_words"].split(",")] if bot_data.get("trigger_words") else []
+    trigger_level = bot_data.get("activity_level") or 0.0
+    history_lines = sys_config.get("history_lines") or 10
+    llm_cfg = {
+        "base_url": sys_config["openai_base_url"],
+        "api_key": sys_config["openai_api_key"],
+        "model": sys_config["model_name"],
+        "temperature": sys_config["default_temperature"],
+    }
+
     history_list = []
-    channel_history = [m async for m in message.channel.history(limit=bot_config["history_lines"] + 1)]
+    channel_history = [m async for m in message.channel.history(limit=history_lines + 1)]
     for hist in channel_history:
         if remove_id(hist.content) != remove_id(message.content):
             history_list.append(hist.author.name + ": " + remove_id(hist.content))
@@ -112,33 +127,31 @@ async def on_message(message):
     if rel:
         relationship_context = f"\n\nFacts about {message.author.name}:\n{rel['facts']}"
 
-    current_identity = bot_config["identity"] + relationship_context
+    system_prompt = build_identity(bot_data) + relationship_context
 
     if client.user.mentioned_in(message):
         prompt = format_prompt(
-            bot_config["question_prompt"],
+            QUESTION_PROMPT,
             message.author.name,
             remove_id(message.content),
             history_text,
         )
-        prompt = prompt.replace("{identity}", current_identity)
         direct_msg = True
-        bot_response = filter_mentions(llm_local(prompt, current_identity))
+        bot_response = filter_mentions(llm_local(prompt, system_prompt, llm_cfg))
         for chunk in split_message(bot_response):
             await message.channel.send(chunk)
 
-    comment_on_it = any(word in message.content for word in bot_config["triggers"])
-    if comment_on_it and random.random() <= float(bot_config["trigger_level"]) and not direct_msg:
+    comment_on_it = any(word in message.content for word in triggers)
+    if comment_on_it and random.random() <= float(trigger_level) and not direct_msg:
         prompt = format_prompt(
-            bot_config["trigger_prompt"],
+            TRIGGER_PROMPT,
             message.author.name,
             remove_id(message.content),
             history_text,
         )
-        prompt = prompt.replace("{identity}", current_identity)
-        bot_response = filter_mentions(llm_local(prompt, current_identity))
+        bot_response = filter_mentions(llm_local(prompt, system_prompt, llm_cfg))
         for chunk in split_message(bot_response):
             await message.channel.send(chunk)
 
 
-client.run(bot_config["discord_token"])
+client.run(discord_token)
