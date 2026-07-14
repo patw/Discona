@@ -26,8 +26,9 @@ def main():
     print(f"Loading bots from {data_dir}...")
 
     try:
-        bots_col = Collection(os.path.join(data_dir, 'bots.bson'), indexes=['name'])
+        bots_col = Collection(os.path.join(data_dir, 'bots.bson'), indexes=['name'], readonly=True)
         bots = bots_col.find({}).to_list()
+        bots_col.close()  # Release the collection — we only needed the bot list
 
         if not bots:
             print("No bots found.")
