@@ -15,9 +15,9 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(name
 log = logging.getLogger('discona')
 
 data_dir = os.getenv('DATA_DIR', '.')
-bots_col = Collection(os.path.join(data_dir, 'bots.bson'), indexes=['name'])
-rels_col = Collection(os.path.join(data_dir, 'relationships.bson'), indexes=['bot_id', 'name'])
-config_col = Collection(os.path.join(data_dir, 'system_config.bson'))
+bots_col = Collection(os.path.join(data_dir, 'bots.bson'), indexes=['name'], readonly=True)
+rels_col = Collection(os.path.join(data_dir, 'relationships.bson'), indexes=['bot_id', 'name'], readonly=True)
+config_col = Collection(os.path.join(data_dir, 'system_config.bson'), readonly=True)
 
 if len(sys.argv) != 2:
     print("Usage: python discord_llama.py <bot_id>")

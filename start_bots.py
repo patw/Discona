@@ -78,8 +78,9 @@ def main():
     log(f"Loading bots from {data_dir}...")
 
     try:
-        bots_col = Collection(os.path.join(data_dir, 'bots.bson'), indexes=['name'])
+        bots_col = Collection(os.path.join(data_dir, 'bots.bson'), indexes=['name'], readonly=True)
         bots = bots_col.find({}).to_list()
+        bots_col.close()  # Release the collection — we only needed the bot list
     except Exception as e:
         log(f"An error occurred while reading bots: {e}")
         return
