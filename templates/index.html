@@ -61,6 +61,7 @@
                             <tr>
                                 <th>Name</th>
                                 <th>Description</th>
+                                <th>Status</th>
                                 <th>Actions</th>
                             </tr>
                         </thead>
@@ -68,7 +69,14 @@
                             {% for bot in bots %}
                             <tr>
                                 <td>{{ bot['name'] }}</td>
-                                <td>{{ bot['description'] }}</td>
+                                <td>{{ bot['description'] or '' }}</td>
+                                <td>
+                                    {% if bot.get('enabled', True) %}
+                                    <span class="badge bg-success">Enabled</span>
+                                    {% else %}
+                                    <span class="badge bg-secondary">Disabled</span>
+                                    {% endif %}
+                                </td>
                                 <td>
                                     <a href="{{ url_for('edit_bot', bot_id=bot['_id']) }}"
                                         class="btn btn-sm btn-outline-warning me-1">Edit</a>
@@ -77,6 +85,12 @@
                                         data-bot-id="{{ bot['_id'] }}" data-bot-name="{{ bot['name'] }}">
                                         Delete
                                     </button>
+                                    <form action="{{ url_for('toggle_bot', bot_id=bot['_id']) }}" method="post"
+                                        style="display:inline;">
+                                        <button type="submit" class="btn btn-sm btn-outline-secondary me-1">
+                                            {% if bot.get('enabled', True) %}Disable{% else %}Enable{% endif %}
+                                        </button>
+                                    </form>
                                     <a href="{{ url_for('bot_relationships', bot_id=bot['_id']) }}"
                                         class="btn btn-sm btn-outline-info">Relationships</a>
                                 </td>

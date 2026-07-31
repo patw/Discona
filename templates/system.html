@@ -53,6 +53,9 @@
             <div class="col-md-8">
                 <div class="card p-4 mt-5">
                     <h2 class="mb-4 text-center">System Configuration</h2>
+                    {% if error %}
+                    <div class="alert alert-danger">{{ error }}</div>
+                    {% endif %}
                     <form method="post">
                         <div class="mb-3">
                             <label for="openai_base_url" class="form-label">OpenAI Base URL</label>
@@ -82,7 +85,7 @@
                             <label for="history_lines" class="form-label">History Lines</label>
                             <input type="number" class="form-control" id="history_lines"
                                 name="history_lines" min="0" max="100" step="1"
-                                value="{{ config['history_lines'] if config['history_lines'] is not none else 10 }}">
+                                value="{{ config.get('history_lines', 10) }}">
                             <div class="form-text text-muted">Number of previous Discord messages each bot sees as context.</div>
                         </div>
                         <div class="d-flex justify-content-between mt-4">

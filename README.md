@@ -50,8 +50,9 @@ Edit `.env`:
 | Variable | Default | Description |
 |---|---|---|
 | `DATA_DIR` | `.` | Directory where BSON data files are stored |
-| `ADMIN_PASSWORD` | `admin` | Web UI login password |
-| `SECRET_KEY` | `dev_secret` | Flask session secret — change in production |
+| `ADMIN_PASSWORD` | `admin` | Web UI login password — change this! |
+| `SECRET_KEY` | `dev_secret` | Flask session secret — change in production! |
+| `API_TOKEN` | *(unset)* | If set, the machine-readable API endpoints require `?token=...` |
 
 LLM settings (base URL, model name, temperature, history window) are managed through the web UI under **System**.
 
@@ -87,8 +88,11 @@ Each bot has the following fields:
 | **Personality** | Second section of the system prompt |
 | **Writing Sample** | Third section — examples of how the bot writes |
 | **Discord API Key** | Bot token from the Discord Developer Portal |
-| **Trigger Words** | Comma-separated words that may cause the bot to reply unprompted |
+| **Trigger Words** | Comma-separated words that may cause the bot to reply unprompted (word-boundary, case-insensitive matching) |
 | **Activity Level** | Probability (0.0–1.0) of replying when a trigger word is seen |
+| **Model Name** | *(optional)* Overrides the system model for this bot |
+| **Temperature** | *(optional)* Overrides the system temperature for this bot |
+| **Enabled** | Turn a bot on/off from the bot list without deleting it |
 
 The bot's full system prompt is `backstory + personality + writing_sample`, optionally extended with relationship facts when a known user sends a message.
 
@@ -100,10 +104,12 @@ Managed via the **Relationships** button on the bot list in the web UI.
 
 ## How Bots Respond
 
-1. **Direct mention** — if the bot is @mentioned, it always replies using the full `question_prompt` template.
-2. **Trigger words** — if the message contains any configured trigger word and a random roll beats the activity level, the bot replies using the `trigger_prompt` template (which hints that a reply is optional). A bot won't do both in one message.
+1. **Direct mention** — if the bot is @mentioned, it always replies (as a threaded reply) using the full `question_prompt` template.
+2. **Trigger words** — if the message contains any configured trigger word (matched case-insensitively on word boundaries) and a random roll beats the activity level, the bot replies using the `trigger_prompt` template (which hints that a reply is optional). A bot won't do both in one message.
 
-Responses longer than 2000 characters are automatically split into multiple Discord messages.
+History is only fetched and the LLM only called when the bot is actually going to reply — the bot ignores everything else, which keeps busy channels cheap. The (potentially slow) LLM call runs off the Discord event loop, so slow responses never cause gateway timeouts, and a typing indicator is shown while the bot "thinks".
+
+Responses longer than 2000 characters are split into multiple Discord messages at newline boundaries (with ` ``` ` code fences kept balanced across chunks so Discord doesn't render half a message as code). `@here`/`@everyone`/`@channel` output from the model is de-@'d so a bot can never ping a whole room.
 
 ## Data Storage
 

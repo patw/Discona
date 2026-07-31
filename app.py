@@ -2,6 +2,8 @@ from flask import Flask, render_template, request, redirect, url_for, session, j
 from flask_bootstrap import Bootstrap5
 import os
 import uuid
+import hmac
+import time
 from dotenv import load_dotenv
 from moofile import Collection
 
@@ -9,6 +11,12 @@ load_dotenv()
 
 app = Flask(__name__)
 app.secret_key = os.getenv('SECRET_KEY', 'dev_secret')
+if app.secret_key == 'dev_secret':
+    print('WARNING: SECRET_KEY is not set — using the insecure default. Set SECRET_KEY in .env.')
+app.config.update(
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE='Strict',
+)
 admin_password = os.getenv('ADMIN_PASSWORD', 'admin')
 bootstrap = Bootstrap5(app)
 
@@ -29,6 +37,47 @@ if not config_col.exists({'_id': 'config'}):
     })
 
 
+def _parse_float(value, default, label):
+    """Parse a form float field; blank -> default, garbage -> ValueError."""
+    if value is None or str(value).strip() == '':
+        return default
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        raise ValueError(f'{label} must be a number.')
+
+
+def _parse_int(value, default, label):
+    if value is None or str(value).strip() == '':
+        return default
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        raise ValueError(f'{label} must be a whole number.')
+
+
+def _parse_activity_level(value):
+    """Blank -> None, otherwise a float in [0, 1] or a ValueError."""
+    level = _parse_float(value, None, 'Activity level')
+    if level is not None and not (0.0 <= level <= 1.0):
+        raise ValueError('Activity level must be between 0 and 1.')
+    return level
+
+
+@app.before_request
+def _api_auth():
+    """Gate the machine-readable endpoints behind an optional shared token.
+
+    These endpoints used to be fully public and returned secrets (Discord bot
+    tokens, the LLM API key). Secrets are now scrubbed from their responses;
+    set API_TOKEN in .env to restrict access entirely.
+    """
+    if request.path.startswith(('/list_bots', '/get_bot', '/get_relationship', '/get_system_config')):
+        token = os.getenv('API_TOKEN')
+        if token and request.args.get('token') != token:
+            return jsonify({'error': 'Unauthorized'}), 401
+
+
 @app.route('/')
 def index():
     if not session.get('logged_in'):
@@ -44,7 +93,13 @@ def new_bot():
     if request.method == 'POST':
         name = request.form.get('name')
         if name:
-            activity_level_str = request.form.get('activity_level')
+            try:
+                activity_level = _parse_activity_level(request.form.get('activity_level'))
+                temperature = _parse_float(request.form.get('temperature'), None, 'Temperature')
+                if temperature is not None and not (0.0 <= temperature <= 2.0):
+                    raise ValueError('Temperature must be between 0 and 2.')
+            except ValueError as e:
+                return render_template('new_bot.html', error=str(e))
             bots_col.insert({
                 '_id': str(uuid.uuid4()),
                 'name': name,
@@ -54,7 +109,10 @@ def new_bot():
                 'writing_sample': request.form.get('writing_sample'),
                 'discord_api_key': request.form.get('discord_api_key'),
                 'trigger_words': request.form.get('trigger_words'),
-                'activity_level': float(activity_level_str) if activity_level_str else None,
+                'activity_level': activity_level,
+                'model_name': request.form.get('model_name') or None,
+                'temperature': temperature,
+                'enabled': True,
             })
             return redirect(url_for('index'))
     return render_template('new_bot.html')
@@ -101,7 +159,13 @@ def edit_bot(bot_id):
     if request.method == 'POST':
         name = request.form.get('name')
         if name:
-            activity_level_str = request.form.get('activity_level')
+            try:
+                activity_level = _parse_activity_level(request.form.get('activity_level'))
+                temperature = _parse_float(request.form.get('temperature'), None, 'Temperature')
+                if temperature is not None and not (0.0 <= temperature <= 2.0):
+                    raise ValueError('Temperature must be between 0 and 2.')
+            except ValueError as e:
+                return render_template('edit_bot.html', bot=bot, error=str(e))
             bots_col.update_one(where={'_id': bot_id}, set={
                 'name': name,
                 'description': request.form.get('description'),
@@ -110,7 +174,9 @@ def edit_bot(bot_id):
                 'writing_sample': request.form.get('writing_sample'),
                 'discord_api_key': request.form.get('discord_api_key'),
                 'trigger_words': request.form.get('trigger_words'),
-                'activity_level': float(activity_level_str) if activity_level_str else None,
+                'activity_level': activity_level,
+                'model_name': request.form.get('model_name') or None,
+                'temperature': temperature,
             })
             return redirect(url_for('index'))
     return render_template('edit_bot.html', bot=bot)
@@ -144,6 +210,18 @@ def delete_bot(bot_id):
     return redirect(url_for('index'))
 
 
+@app.route('/bot/<bot_id>/toggle', methods=['POST'])
+def toggle_bot(bot_id):
+    """Enable/disable a bot without deleting it. Takes effect on the next
+    message the bot runner sees."""
+    if not session.get('logged_in'):
+        return redirect(url_for('login'))
+    bot = bots_col.find_one({'_id': bot_id})
+    if bot:
+        bots_col.update_one(where={'_id': bot_id}, set={'enabled': not bot.get('enabled', True)})
+    return redirect(url_for('index'))
+
+
 @app.route('/bot/<bot_id>/relationship/<rel_id>/delete', methods=['POST'])
 def delete_relationship(bot_id, rel_id):
     if not session.get('logged_in'):
@@ -155,7 +233,7 @@ def delete_relationship(bot_id, rel_id):
 @app.route('/list_bots')
 def list_bots():
     bots = bots_col.find({}).to_list()
-    return jsonify([{'id': b['_id'], 'name': b['name']} for b in bots])
+    return jsonify([{'id': b['_id'], 'name': b['name'], 'enabled': b.get('enabled', True)} for b in bots])
 
 
 @app.route('/get_bot/<bot_id>')
@@ -163,6 +241,9 @@ def get_bot(bot_id):
     bot = bots_col.find_one({'_id': bot_id})
     if not bot:
         return jsonify({'error': 'Bot not found'}), 404
+    # Note: discord_api_key is intentionally NOT exposed here (it used to be
+    # public to anyone who could reach this server). The bot runner reads the
+    # data file directly, so no tooling needs it over HTTP.
     return jsonify({
         'id': bot['_id'],
         'name': bot['name'],
@@ -170,9 +251,11 @@ def get_bot(bot_id):
         'backstory': bot.get('backstory'),
         'personality': bot.get('personality'),
         'writing_sample': bot.get('writing_sample'),
-        'discord_api_key': bot.get('discord_api_key'),
         'trigger_words': bot.get('trigger_words'),
         'activity_level': bot.get('activity_level'),
+        'model_name': bot.get('model_name'),
+        'temperature': bot.get('temperature'),
+        'enabled': bot.get('enabled', True),
     })
 
 
@@ -189,14 +272,22 @@ def system():
     if not session.get('logged_in'):
         return redirect(url_for('login'))
     if request.method == 'POST':
-        temp_str = request.form.get('default_temperature', '0.7')
-        hist_str = request.form.get('history_lines', '10')
+        try:
+            temp = _parse_float(request.form.get('default_temperature'), 0.7, 'Default temperature')
+            hist = _parse_int(request.form.get('history_lines'), 10, 'History lines')
+            if not (0.0 <= temp <= 2.0):
+                raise ValueError('Default temperature must be between 0 and 2.')
+            if hist < 0:
+                raise ValueError('History lines cannot be negative.')
+        except ValueError as e:
+            config = config_col.find_one({'_id': 'config'})
+            return render_template('system.html', config=config, error=str(e))
         config_col.update_one(where={'_id': 'config'}, set={
             'openai_base_url': request.form.get('openai_base_url'),
             'openai_api_key': request.form.get('openai_api_key'),
             'model_name': request.form.get('model_name'),
-            'default_temperature': float(temp_str) if temp_str else 0.7,
-            'history_lines': int(hist_str) if hist_str else 10,
+            'default_temperature': temp,
+            'history_lines': hist,
         })
         return redirect(url_for('system'))
     config = config_col.find_one({'_id': 'config'})
@@ -206,9 +297,10 @@ def system():
 @app.route('/get_system_config')
 def get_system_config():
     config = config_col.find_one({'_id': 'config'})
+    # The LLM api_key is intentionally not exposed here (it used to be public
+    # to anyone who could reach this server).
     return jsonify({
         'base_url': config['openai_base_url'],
-        'api_key': config['openai_api_key'],
         'model': config['model_name'],
         'temperature': config['default_temperature'],
         'history_lines': config.get('history_lines') or 10,
@@ -218,10 +310,23 @@ def get_system_config():
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     if request.method == 'POST':
-        if request.form.get('password') == admin_password:
+        now = time.time()
+        if now < session.get('lockout_until', 0):
+            return render_template('login.html', error='Too many attempts. Try again in 30 seconds.')
+        if hmac.compare_digest(request.form.get('password', ''), admin_password):
+            session.clear()
             session['logged_in'] = True
+            session['login_attempts'] = 0
             return redirect(url_for('index'))
-        return render_template('login.html', error='Invalid password')
+        attempts = session.get('login_attempts', 0) + 1
+        if attempts >= 5:
+            session['lockout_until'] = now + 30
+            session['login_attempts'] = 0
+            error = 'Too many failed attempts. Try again in 30 seconds.'
+        else:
+            session['login_attempts'] = attempts
+            error = 'Invalid password'
+        return render_template('login.html', error=error)
     return render_template('login.html')
 
 

@@ -12,6 +12,8 @@ deploy.sh
 # Data files
 *.bson
 *.bson.meta
+*.bson.cache
+*.bson.lock
 *.db
 
 # Python

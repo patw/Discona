@@ -3,11 +3,16 @@ import re
 import random
 import sys
 import os
+import asyncio
+import logging
 from openai import OpenAI
 from dotenv import load_dotenv
 from moofile import Collection
 
 load_dotenv()
+
+logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(name)s: %(message)s')
+log = logging.getLogger('discona')
 
 data_dir = os.getenv('DATA_DIR', '.')
 bots_col = Collection(os.path.join(data_dir, 'bots.bson'), indexes=['name'])
@@ -27,7 +32,10 @@ if not bot_data:
     print(f"Error: Bot ID {bot_id} not found.")
     sys.exit(1)
 
-discord_token = bot_data["discord_api_key"]
+discord_token = bot_data.get("discord_api_key")
+if not discord_token:
+    print(f"Error: Bot {bot_id} has no discord_api_key configured.")
+    sys.exit(1)
 
 QUESTION_PROMPT = "Context:\n{history}\n\n{user} asks: {question}\n\nReply:"
 TRIGGER_PROMPT = "Context:\n{history}\n\n{user} says: {question}\n\nReply (optional, stay in character):"
@@ -36,13 +44,20 @@ intents = discord.Intents.default()
 intents.message_content = True
 client = discord.Client(intents=intents)
 
+# Discord mentions come in three forms: <@123>, <@!123> (nickname), <@&123> (role).
+MENTION_RE = re.compile(r'<@!?&?\d+>')
+# Only strip the '@' from real room mentions so a bot can never ping a whole channel.
+EVERYONE_MENTION_RE = re.compile(r'@(?=(?:here|everyone|channel)\b)', re.IGNORECASE)
+
 
 def remove_id(text):
-    return re.sub(r'<@\d+>', '', text)
+    """Strip <@id>/<@!id>/<@&id> mention syntax from a message."""
+    return MENTION_RE.sub('', text).strip()
 
 
-def filter_mentions(text):
-    return re.sub(r'[@]?(\b(here|everyone|channel)\b)', '', text)
+def strip_everyone_mentions(text):
+    """Turn @here/@everyone/@channel into plain words (no accidental pings)."""
+    return EVERYONE_MENTION_RE.sub('', text)
 
 
 def format_prompt(prompt, user, question, history):
@@ -52,12 +67,58 @@ def format_prompt(prompt, user, question, history):
             .replace("{history}", history))
 
 
-def split_message(message):
-    return [message[i:i+2000] for i in range(0, len(message), 2000)]
+def split_message(message, limit=2000):
+    """Split into <=limit chunks, preferring newline boundaries and keeping
+    ``` code fences balanced across messages so Discord doesn't render the
+    rest of a chunk as code."""
+    if len(message) <= limit:
+        return [message]
+
+    # Leave headroom for the '```\n' / '\n```' markers the fence balancer may add.
+    effective = limit - 8
+
+    pieces = []
+    while len(message) > effective:
+        cut = message.rfind('\n', 0, effective)
+        if cut < effective // 2:
+            cut = effective
+        pieces.append(message[:cut])
+        message = message[cut:].lstrip('\n')
+    if message:
+        pieces.append(message)
+
+    # Balance code fences across chunk boundaries.
+    out = []
+    in_fence = False
+    for p in pieces:
+        n = p.count('```')
+        start = in_fence
+        in_fence = bool((n % 2 == 1) ^ start)   # odd count toggles the fence state
+        end = in_fence
+        if start:
+            p = '```\n' + p
+        if end:
+            p = p + '\n```'
+        out.append(p)
+    return out
+
+
+# Cache OpenAI clients per (base_url, api_key) — creating one per message leaks
+# HTTP connections and is pure overhead. Config edits just build a new client.
+_openai_clients = {}
+
+
+def _get_openai_client(llm_cfg):
+    key = (llm_cfg["base_url"], llm_cfg["api_key"])
+    openai_client = _openai_clients.get(key)
+    if openai_client is None:
+        openai_client = OpenAI(api_key=llm_cfg["api_key"], base_url=llm_cfg["base_url"])
+        _openai_clients[key] = openai_client
+    return openai_client
 
 
 def llm_local(prompt, system_prompt, llm_cfg):
-    openai_client = OpenAI(api_key=llm_cfg["api_key"], base_url=llm_cfg["base_url"])
+    openai_client = _get_openai_client(llm_cfg)
     messages = [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": prompt},
@@ -97,30 +158,53 @@ async def on_message(message):
         print(f"Bot {bot_id} no longer in database, skipping.")
         return
 
+    if bot_data.get('enabled', True) is False:
+        return  # Disabled from the web UI — stay connected but stay quiet.
+
     sys_config = config_col.find_one({'_id': 'config'})
     if not sys_config:
         print("System config not found, skipping.")
         return
 
-    triggers = [w.strip() for w in bot_data["trigger_words"].split(",")] if bot_data.get("trigger_words") else []
-    trigger_level = bot_data.get("activity_level") or 0.0
-    history_lines = sys_config.get("history_lines") or 10
+    triggers = [w.strip() for w in (bot_data.get("trigger_words") or "").split(",") if w.strip()]
+    try:
+        trigger_level = float(bot_data.get("activity_level") or 0.0)
+    except (TypeError, ValueError):
+        trigger_level = 0.0
+    try:
+        history_lines = int(sys_config.get("history_lines") or 10)
+    except (TypeError, ValueError):
+        history_lines = 10
+
+    # Per-bot overrides fall back to the system config.
+    model = bot_data.get("model_name") or sys_config.get("model_name")
+    try:
+        temp = float(bot_data.get("temperature")) if bot_data.get("temperature") is not None \
+            else float(sys_config.get("default_temperature") or 0.7)
+    except (TypeError, ValueError):
+        temp = 0.7
     llm_cfg = {
         "base_url": sys_config["openai_base_url"],
         "api_key": sys_config["openai_api_key"],
-        "model": sys_config["model_name"],
-        "temperature": sys_config["default_temperature"],
+        "model": model,
+        "temperature": temp,
     }
 
-    history_list = []
-    channel_history = [m async for m in message.channel.history(limit=history_lines + 1)]
-    for hist in channel_history:
-        if remove_id(hist.content) != remove_id(message.content):
-            history_list.append(hist.author.name + ": " + remove_id(hist.content))
-    history_list.reverse()
-    history_text = '\n'.join(history_list)
+    mentioned = client.user.mentioned_in(message)
+    # Word-boundary, case-insensitive trigger matching: "cat" no longer matches
+    # "concatenate", and "Vector" matches a lowercase "vector" in chat.
+    comment_on_it = any(
+        re.search(r'(?<!\w)' + re.escape(w) + r'(?!\w)', message.content, re.IGNORECASE)
+        for w in triggers
+    )
 
-    direct_msg = False
+    # Cheap gates first — never fetch history or hit the LLM unless we're going to reply.
+    if mentioned:
+        mode = 'direct'
+    elif comment_on_it and random.random() <= trigger_level:
+        mode = 'trigger'
+    else:
+        return
 
     relationship_context = ""
     rel = rels_col.find_one({'bot_id': bot_id, 'name': message.author.name})
@@ -129,28 +213,37 @@ async def on_message(message):
 
     system_prompt = build_identity(bot_data) + relationship_context
 
-    if client.user.mentioned_in(message):
-        prompt = format_prompt(
-            QUESTION_PROMPT,
-            message.author.name,
-            remove_id(message.content),
-            history_text,
-        )
-        direct_msg = True
-        bot_response = filter_mentions(llm_local(prompt, system_prompt, llm_cfg))
-        for chunk in split_message(bot_response):
-            await message.channel.send(chunk)
+    # Conversation history — only the messages before this one (before= avoids
+    # the old content-compare hack that dropped identical consecutive messages).
+    history_list = []
+    channel_history = [m async for m in message.channel.history(limit=history_lines, before=message)]
+    for hist in channel_history:
+        history_list.append(f"{hist.author.name}: {remove_id(hist.content)}")
+    history_list.reverse()
+    history_text = '\n'.join(history_list)
 
-    comment_on_it = any(word in message.content for word in triggers)
-    if comment_on_it and random.random() <= float(trigger_level) and not direct_msg:
-        prompt = format_prompt(
-            TRIGGER_PROMPT,
-            message.author.name,
-            remove_id(message.content),
-            history_text,
-        )
-        bot_response = filter_mentions(llm_local(prompt, system_prompt, llm_cfg))
-        for chunk in split_message(bot_response):
+    prompt = format_prompt(
+        QUESTION_PROMPT if mode == 'direct' else TRIGGER_PROMPT,
+        message.author.name,
+        remove_id(message.content),
+        history_text,
+    )
+
+    # The LLM call blocks for a long time — run it off the event loop so the
+    # Discord gateway heartbeat isn't starved (otherwise slow responses cause
+    # random disconnects). Show a typing indicator while we wait.
+    try:
+        async with message.channel.typing():
+            bot_response = await asyncio.to_thread(llm_local, prompt, system_prompt, llm_cfg)
+    except Exception as e:
+        log.exception("LLM call failed for bot %s: %s", bot_id, e)
+        return
+
+    bot_response = strip_everyone_mentions(bot_response or "")
+    for chunk in split_message(bot_response):
+        if mode == 'direct':
+            await message.reply(chunk, mention_author=False)
+        else:
             await message.channel.send(chunk)
 
 

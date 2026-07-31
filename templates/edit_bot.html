@@ -53,6 +53,9 @@
             <div class="col-md-8">
                 <div class="card p-4 mt-5">
                     <h2 class="mb-4 text-center">Edit Bot</h2>
+                    {% if error %}
+                    <div class="alert alert-danger">{{ error }}</div>
+                    {% endif %}
                     <form method="post">
                         <div class="mb-3">
                             <label for="name" class="form-label">Name</label>
@@ -88,6 +91,18 @@
                             <label for="activity_level" class="form-label">Activity Level</label>
                             <input type="number" class="form-control" id="activity_level" name="activity_level" min="0"
                                 max="1" step="0.01" value="{{ bot['activity_level'] or '' }}" placeholder="0 to 1">
+                        </div>
+                        <div class="mb-3">
+                            <label for="model_name" class="form-label">Model Name
+                                <span class="text-muted">(optional — overrides system model)</span></label>
+                            <input type="text" class="form-control" id="model_name" name="model_name"
+                                value="{{ bot['model_name'] or '' }}" placeholder="e.g. llama-3-8b">
+                        </div>
+                        <div class="mb-3">
+                            <label for="temperature" class="form-label">Temperature
+                                <span class="text-muted">(optional — overrides system default)</span></label>
+                            <input type="number" class="form-control" id="temperature" name="temperature" min="0"
+                                max="2" step="0.1" value="{{ bot['temperature'] or '' }}" placeholder="e.g. 0.7">
                         </div>
                         <div class="mb-3">
                             <label for="discord_api_key" class="form-label">Discord API Key</label>
