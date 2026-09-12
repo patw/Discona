@@ -54,7 +54,9 @@ Edit `.env`:
 | `SECRET_KEY` | `dev_secret` | Flask session secret — change in production! |
 | `API_TOKEN` | *(unset)* | If set, the machine-readable API endpoints require `?token=...` |
 
-LLM settings (base URL, model name, temperature, history window) are managed through the web UI under **System**.
+LLM settings (base URL, model name, temperature, history window, max response tokens, model reasoning) are managed through the web UI under **System**.
+
+**Model Reasoning** controls the `reasoning_effort` value sent to the backend and defaults to **Off** (`none`). Reasoning models bill hidden chain-of-thought against the reply's token budget, so with reasoning on a hard question can spend the entire **Max Response Tokens** allowance "thinking" and return no visible answer — in Discord that looks like the bot showing a typing indicator and then going silent. Off keeps replies fast, cheap and non-empty; low/medium/high re-enable thinking, and the runner still retries once with reasoning off if a reply is ever truncated to empty.
 
 ## Running
 

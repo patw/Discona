@@ -88,6 +88,27 @@
                                 value="{{ config.get('history_lines', 10) }}">
                             <div class="form-text text-muted">Number of previous Discord messages each bot sees as context.</div>
                         </div>
+                        <div class="mb-3">
+                            <label for="max_tokens" class="form-label">Max Response Tokens</label>
+                            <input type="number" class="form-control" id="max_tokens"
+                                name="max_tokens" min="256" max="32000" step="256"
+                                value="{{ config.get('max_tokens', 4000) }}">
+                            <div class="form-text text-muted">Token budget per reply. Reasoning models spend part of this
+                                on hidden thinking, so a low value can leave nothing to post.</div>
+                        </div>
+                        <div class="mb-3">
+                            <label for="reasoning_effort" class="form-label">Model Reasoning</label>
+                            {% set effort = config.get('reasoning_effort', 'none') %}
+                            <select class="form-select" id="reasoning_effort" name="reasoning_effort">
+                                <option value="none" {% if effort == 'none' %}selected{% endif %}>Off (recommended)</option>
+                                <option value="low" {% if effort == 'low' %}selected{% endif %}>Low</option>
+                                <option value="medium" {% if effort == 'medium' %}selected{% endif %}>Medium</option>
+                                <option value="high" {% if effort == 'high' %}selected{% endif %}>High</option>
+                            </select>
+                            <div class="form-text text-muted">Hidden chain-of-thought is billed against Max Response
+                                Tokens and can swallow the whole budget, leaving no reply at all. Off keeps replies
+                                fast and never silent; raise it only if a bot needs deep reasoning.</div>
+                        </div>
                         <div class="d-flex justify-content-between mt-4">
                             <a href="{{ url_for('index') }}" class="btn btn-outline-secondary">Cancel</a>
                             <button type="submit" class="btn btn-primary">Save Configuration</button>

@@ -22,6 +22,10 @@ bootstrap = Bootstrap5(app)
 
 data_dir = os.getenv('DATA_DIR', '.')
 
+# Values accepted for the system "Model Reasoning" setting; forwarded verbatim
+# to the backend as `reasoning_effort` ("none" disables hidden reasoning).
+REASONING_EFFORTS = ('none', 'low', 'medium', 'high')
+
 bots_col = Collection(os.path.join(data_dir, 'bots.bson'), indexes=['name'])
 rels_col = Collection(os.path.join(data_dir, 'relationships.bson'), indexes=['bot_id', 'name'])
 config_col = Collection(os.path.join(data_dir, 'system_config.bson'))
@@ -34,6 +38,8 @@ if not config_col.exists({'_id': 'config'}):
         'model_name': 'llama-3-8b',
         'default_temperature': 0.7,
         'history_lines': 10,
+        'max_tokens': 4000,
+        'reasoning_effort': 'none',
     })
 
 
@@ -275,10 +281,16 @@ def system():
         try:
             temp = _parse_float(request.form.get('default_temperature'), 0.7, 'Default temperature')
             hist = _parse_int(request.form.get('history_lines'), 10, 'History lines')
+            max_tokens = _parse_int(request.form.get('max_tokens'), 4000, 'Max response tokens')
+            reasoning_effort = request.form.get('reasoning_effort', 'none')
             if not (0.0 <= temp <= 2.0):
                 raise ValueError('Default temperature must be between 0 and 2.')
             if hist < 0:
                 raise ValueError('History lines cannot be negative.')
+            if not (256 <= max_tokens <= 32000):
+                raise ValueError('Max response tokens must be between 256 and 32000.')
+            if reasoning_effort not in REASONING_EFFORTS:
+                raise ValueError('Reasoning must be one of: none, low, medium, high.')
         except ValueError as e:
             config = config_col.find_one({'_id': 'config'})
             return render_template('system.html', config=config, error=str(e))
@@ -288,6 +300,8 @@ def system():
             'model_name': request.form.get('model_name'),
             'default_temperature': temp,
             'history_lines': hist,
+            'max_tokens': max_tokens,
+            'reasoning_effort': reasoning_effort,
         })
         return redirect(url_for('system'))
     config = config_col.find_one({'_id': 'config'})
@@ -304,6 +318,8 @@ def get_system_config():
         'model': config['model_name'],
         'temperature': config['default_temperature'],
         'history_lines': config.get('history_lines') or 10,
+        'max_tokens': config.get('max_tokens') or 4000,
+        'reasoning_effort': config.get('reasoning_effort', 'none'),
     })
 
 

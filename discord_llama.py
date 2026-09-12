@@ -37,6 +37,17 @@ if not discord_token:
     print(f"Error: Bot {bot_id} has no discord_api_key configured.")
     sys.exit(1)
 
+# Fallback when system config has no max_tokens set. Reasoning models need
+# plenty of headroom: the hidden reasoning is billed against this budget too.
+DEFAULT_MAX_TOKENS = 4000
+
+# Hidden chain-of-thought is billed against max_tokens, so a reasoning model can
+# spend the whole budget "thinking" and return no visible answer at all — which
+# reaches Discord as "typing…" and then silence. Turn reasoning off by default;
+# if a reply is ever truncated to empty we retry once with it forced off.
+DEFAULT_REASONING_EFFORT = "none"
+REASONING_EFFORTS = ("none", "low", "medium", "high")
+
 QUESTION_PROMPT = "Context:\n{history}\n\n{user} asks: {question}\n\nReply:"
 TRIGGER_PROMPT = "Context:\n{history}\n\n{user} says: {question}\n\nReply (optional, stay in character):"
 
@@ -58,6 +69,19 @@ def remove_id(text):
 def strip_everyone_mentions(text):
     """Turn @here/@everyone/@channel into plain words (no accidental pings)."""
     return EVERYONE_MENTION_RE.sub('', text)
+
+
+# Some backends inline chain-of-thought in the content field instead of a
+# separate reasoning_content field.
+THINK_RE = re.compile(r'<(think|thinking|reasoning)>.*?</\1>', re.DOTALL | re.IGNORECASE)
+THINK_OPEN_RE = re.compile(r'<(think|thinking|reasoning)>.*\Z', re.DOTALL | re.IGNORECASE)
+
+
+def strip_thinking(text):
+    """Drop <think> blocks, including an unterminated one left by a cut-off reply."""
+    text = THINK_RE.sub('', text)
+    text = THINK_OPEN_RE.sub('', text)
+    return text.strip()
 
 
 def format_prompt(prompt, user, question, history):
@@ -117,6 +141,12 @@ def _get_openai_client(llm_cfg):
     return openai_client
 
 
+def _reasoning_tokens(response):
+    """Reasoning tokens the model burned on hidden thinking, if reported."""
+    details = getattr(getattr(response, "usage", None), "completion_tokens_details", None)
+    return getattr(details, "reasoning_tokens", None)
+
+
 def llm_local(prompt, system_prompt, llm_cfg):
     openai_client = _get_openai_client(llm_cfg)
     messages = [
@@ -124,10 +154,61 @@ def llm_local(prompt, system_prompt, llm_cfg):
         {"role": "user", "content": prompt},
     ]
     temp = float(llm_cfg.get("temperature", 0.7))
-    response = openai_client.chat.completions.create(
-        model=llm_cfg["model"], max_tokens=2000, temperature=temp, messages=messages
-    )
-    return response.choices[0].message.content
+    max_tokens = llm_cfg.get("max_tokens") or DEFAULT_MAX_TOKENS
+    requested_effort = llm_cfg.get("reasoning_effort")
+
+    def _complete(reasoning_effort):
+        kwargs = {
+            "model": llm_cfg["model"],
+            "max_tokens": max_tokens,
+            "temperature": temp,
+            "messages": messages,
+        }
+        # Omit the field entirely when falsy so backends that don't know it keep
+        # working; "none" disables hidden reasoning on backends that support it.
+        if reasoning_effort:
+            kwargs["extra_body"] = {"reasoning_effort": reasoning_effort}
+        return openai_client.chat.completions.create(**kwargs)
+
+    response = _complete(requested_effort)
+    choice = response.choices[0]
+    content = strip_thinking(choice.message.content or "")
+
+    # The budget was exhausted before any visible answer — classically a
+    # reasoning model that spent it all on hidden thinking. Rather than leave
+    # the Discord user with a typing indicator and no message, retry once with
+    # reasoning off so the allowance goes to the actual reply.
+    if not content and choice.finish_reason == "length" and requested_effort != "none":
+        log.warning(
+            "Empty reply from model (finish_reason=%s, completion_tokens=%s, reasoning_tokens=%s, "
+            "max_tokens=%s) - retrying once with reasoning off",
+            choice.finish_reason,
+            getattr(response.usage, "completion_tokens", "?"),
+            _reasoning_tokens(response),
+            max_tokens,
+        )
+        try:
+            response = _complete("none")
+            choice = response.choices[0]
+            content = strip_thinking(choice.message.content or "")
+            log.info("Reasoning-off retry returned %d character(s) (finish_reason=%s)",
+                     len(content), choice.finish_reason)
+        except Exception as e:
+            log.warning("Reasoning-off retry failed: %s", e)
+
+    if not content:
+        # Still nothing to post — leave a precise breadcrumb for journalctl.
+        log.warning(
+            "Empty reply from model (finish_reason=%s, completion_tokens=%s, reasoning_tokens=%s, "
+            "max_tokens=%s) - raise Max Response Tokens in system settings if this repeats",
+            choice.finish_reason,
+            getattr(response.usage, "completion_tokens", "?"),
+            _reasoning_tokens(response),
+            max_tokens,
+        )
+    elif choice.finish_reason == "length":
+        log.warning("Reply hit the token limit and was cut off (max_tokens=%s)", max_tokens)
+    return content
 
 
 def build_identity(bot_data):
@@ -175,6 +256,13 @@ async def on_message(message):
         history_lines = int(sys_config.get("history_lines") or 10)
     except (TypeError, ValueError):
         history_lines = 10
+    try:
+        max_tokens = int(sys_config.get("max_tokens") or DEFAULT_MAX_TOKENS)
+    except (TypeError, ValueError):
+        max_tokens = DEFAULT_MAX_TOKENS
+    reasoning_effort = sys_config.get("reasoning_effort", DEFAULT_REASONING_EFFORT)
+    if reasoning_effort not in REASONING_EFFORTS:
+        reasoning_effort = DEFAULT_REASONING_EFFORT
 
     # Per-bot overrides fall back to the system config.
     model = bot_data.get("model_name") or sys_config.get("model_name")
@@ -188,6 +276,8 @@ async def on_message(message):
         "api_key": sys_config["openai_api_key"],
         "model": model,
         "temperature": temp,
+        "max_tokens": max_tokens,
+        "reasoning_effort": reasoning_effort,
     }
 
     mentioned = client.user.mentioned_in(message)
@@ -240,11 +330,22 @@ async def on_message(message):
         return
 
     bot_response = strip_everyone_mentions(bot_response or "")
-    for chunk in split_message(bot_response):
-        if mode == 'direct':
-            await message.reply(chunk, mention_author=False)
-        else:
-            await message.channel.send(chunk)
+    # Discord rejects an empty message with a 400, which used to surface as the
+    # bot typing and then saying nothing at all.
+    chunks = [c for c in split_message(bot_response) if c.strip()]
+    if not chunks:
+        log.warning("Nothing to send for bot %s - the model returned no text.", bot_id)
+        return
+
+    for chunk in chunks:
+        try:
+            if mode == 'direct':
+                await message.reply(chunk, mention_author=False)
+            else:
+                await message.channel.send(chunk)
+        except discord.HTTPException as e:
+            log.warning("Failed to send a %d character chunk for bot %s: %s",
+                        len(chunk), bot_id, e)
 
 
 client.run(discord_token)
